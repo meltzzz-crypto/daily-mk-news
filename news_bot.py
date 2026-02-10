@@ -11,11 +11,11 @@ WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 
 def get_summary_from_url(url):
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         res = requests.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # 본문 찾기 (매일경제 사이트 구조 분석)
+        # 본문 찾기
         content = ""
         for selector in ["div.art_txt", "div.news_cnt_detail_wrap", ".txt_area"]:
             element = soup.select_one(selector)
@@ -25,12 +25,12 @@ def get_summary_from_url(url):
         
         if not content: return None
 
-        # 3문장 요약 (간단한 로직)
+        # 요약 (3문장)
         sentences = content.split('다.')
         summary = []
         for s in sentences:
             s = s.strip()
-            if len(s) > 30 and "기자" not in s: # 너무 짧거나 기자 이름 등 제외
+            if len(s) > 30 and "기자" not in s: 
                 summary.append(s + '다.')
                 if len(summary) >= 3: break
         
@@ -39,12 +39,12 @@ def get_summary_from_url(url):
         return None
 
 def fetch_rss_news():
-    print("뉴스 가져오는 중...")
+    print("뉴스 7개 가져오는 중...")
     feed = feedparser.parse(RSS_URL)
     news_items = []
     
-    # 13개 가져오기
-    for entry in feed.entries[:13]:
+    # 딱 7개만 가져오기 (메시지 1개에 안전하게 들어감)
+    for entry in feed.entries[:7]:
         link = entry.link
         print(f"처리 중: {entry.title}")
         
@@ -54,7 +54,7 @@ def fetch_rss_news():
         if summary_points:
             desc = "\n".join([f"- {p}" for p in summary_points])
         else:
-            desc = entry.description[:100] + "..." # 실패하면 기본 요약
+            desc = entry.description[:100] + "..."
             
         news_items.append({
             "title": entry.title,
@@ -69,28 +69,26 @@ def fetch_rss_news():
 def send_to_discord(items):
     if not items: return
     
-    # 10개씩 나눠서 보내기 (디스코드 제한)
-    chunks = [items[i:i + 10] for i in range(0, len(items), 10)]
+    print(f"디스코드로 {len(items)}개 전송 중...")
+    embeds = []
     
-    for i, chunk in enumerate(chunks):
-        embeds = []
-        if i == 0:
-            embeds.append({
-                "title": "📰 매일경제 부동산 주요 뉴스 (13선)",
-                "description": f"{datetime.now().strftime('%Y-%m-%d')} 아침 뉴스 요약입니다.",
-                "color": 0x00ff00
-            })
-            
-        for item in chunk:
-            embeds.append({
-                "title": item['title'],
-                "url": item['link'],
-                "description": item['summary'],
-                "footer": {"text": "MK News"}
-            })
-            
-        requests.post(WEBHOOK_URL, json={"username": "MK부동산뉴스봇", "embeds": embeds})
-        time.sleep(1)
+    # 헤더
+    embeds.append({
+        "title": "📰 매일경제 부동산 주요 뉴스 (7선)",
+        "description": f"{datetime.now().strftime('%Y-%m-%d')} 핵심 요약",
+        "color": 0x00ff00
+    })
+        
+    for item in items:
+        embeds.append({
+            "title": item['title'],
+            "url": item['link'],
+            "description": item['summary'],
+            "footer": {"text": "MK News"}
+        })
+        
+    requests.post(WEBHOOK_URL, json={"username": "MK부동산뉴스봇", "embeds": embeds})
+    print("전송 완료!")
 
 if __name__ == "__main__":
     news = fetch_rss_news()
