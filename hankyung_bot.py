@@ -15,30 +15,22 @@ TARGET_URL = "https://www.hankyung.com/mr"
 
 def setup_driver():
     chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Run in background
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     driver = webdriver.Chrome(options=chrome_options)
     return driver
 
 def get_article_summary(driver, url):
-    """
-    Visits the article URL and extracts the first 3 valid sentences.
-    """
     try:
         driver.get(url)
-        # Wait for body text to load
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "#articletxt, .article-body, .article_body"))
-        )
+        time.sleep(2) # 충분히 로딩 대기
         
         soup = BeautifulSoup(driver.page_source, "html.parser")
-        
-        # Common body selectors for Hankyung
-        content_element = soup.select_one("#articletxt") or soup.select_one(".article-body") or soup.select_one(".article_body")
+        content_element = soup.select_one("#articletxt") or soup.select_one(".article-body") or soup.select_one(".article_body") or soup.select_one("#article-body")
         
         if not content_element:
             return None
@@ -49,186 +41,132 @@ def get_article_summary(driver, url):
         summary = []
         for s in sentences:
             s = s.strip()
-            # Filter out short strings, ads, or metadata
             if len(s) > 30 and "기자" not in s and "이메일" not in s and "ⓒ" not in s:
                 summary.append(s + '.')
                 if len(summary) >= 3:
                     break
-                    
         return summary
-    except Exception as e:
-        print(f"Error summarizing {url}: {e}")
+    except:
         return None
 
 def fetch_hankyung_mr():
-    print(f"Fetching {TARGET_URL}...")
+    print(f"🔍 [1/3] 접속 시도 중: {TARGET_URL}")
     driver = setup_driver()
-    data = {
-        "youtube_link": None,
-        "articles": []
-    }
+    data = {"youtube_link": None, "articles": []}
     
     try:
         driver.get(TARGET_URL)
-        # Wait for the main content
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "body"))
-        )
+        time.sleep(5) # 페이지가 완전히 뜰 때까지 넉넉히 대기
         
+        # 화면을 아래로 살짝 내리기 (데이터 로딩 유도)
+        driver.execute_script("window.scrollTo(0, 500);")
+        time.sleep(2)
+
         soup = BeautifulSoup(driver.page_source, "html.parser")
         
-        # 1. Find YouTube Link
-        # Usually in a section '모닝루틴 생방송' or looking for youtube iframe/link
-        # Based on screenshot, there is a "LIVE 2026년 2월 11일 모닝루틴" section with a link
-        youtube_candidates = soup.find_all("a", href=True)
-        for a in youtube_candidates:
+        # 1. 유튜브 링크 찾기
+        links = soup.find_all("a", href=True)
+        for a in links:
             href = a['href']
             if "youtube.com/watch" in href or "youtu.be" in href:
                 data["youtube_link"] = href
                 break
-        
-        if not data["youtube_link"]:
-             # Fallback: finding iframe if embedded
-            iframe = soup.find("iframe", src=True)
-            if iframe and "youtube" in iframe['src']:
-                data["youtube_link"] = iframe['src']
+        print(f"📺 유튜브 링크 찾음: {data['youtube_link']}")
 
-        # 2. Find "모닝루틴 Pick! 오늘의 기사"
-        # Since we don't know the exact class, we look for the header text and get following list
-        # We can simulate clicking links or just grabbing Href
+        # 2. 기사 찾기 (가장 강력한 방식)
+        print("🕵️ [2/3] 기사 목록 검색 중...")
         
-        print("Searching for articles...")
-        # Inspecting page structure via Beautiful Soup logic since we can't see source directly
-        # We look for the text "모닝루틴 Pick! 오늘의 기사" and find the list roughly
-        
-        # Broad search for article links in the right sidebar or main listing
-        # Hankyung article links usually contain '/article/'
-        
-        # Let's try to be smart searching for the container.
-        # Based on screenshot, it's a list on the right. 
-        # We'll just pick all articles that look like news in the main container if specific selector fails.
-        
-        article_links = []
-        
-        # Try to find specific section by text
+        article_candidates = []
+        # '오늘의 기사' 텍스트 주변에서 찾기
         headers = soup.find_all(string=lambda t: t and "오늘의 기사" in t)
         
-        target_container = None
         if headers:
-            # Go up to find the container
-            header = headers[0]
-            target_container = header.find_parent("div") or header.find_parent("section")
-            # Maybe go up one more level if it's just a span
-            if target_container and len(target_container.get_text()) < 50:
-                target_container = target_container.parent
+            print("✅ '오늘의 기사' 섹션 발견!")
+            # 해당 섹션 주변의 모든 링크 수집
+            parent = headers[0].parent
+            for _ in range(6): # 위로 6단계까지 올라가며 컨테이너 검색
+                if parent:
+                    found_links = parent.find_all("a", href=True)
+                    for l in found_links:
+                        url = l['href']
+                        title = l.get_text(strip=True)
+                        if "/article/" in url and len(title) > 10:
+                            if not url.startswith("http"): url = "https://www.hankyung.com" + url
+                            article_candidates.append({"title": title, "url": url})
+                parent = parent.parent if parent else None
         
-        if target_container:
-            links = target_container.find_all("a", href=True)
-        else:
-            # Fallback: Get all links that look like articles
-            links = soup.find_all("a", href=True)
+        # 만약 섹션으로 못찾았다면, 페이지 전체에서 뉴스처럼 보이는 링크 다 긁어오기 (최후의 보루)
+        if not article_candidates:
+            print("⚠️ 섹션을 못 찾아 전체 페이지에서 검색합니다.")
+            for l in links:
+                url = l['href']
+                title = l.get_text(strip=True)
+                if "/article/" in url and len(title) > 15:
+                    if not url.startswith("http"): url = "https://www.hankyung.com" + url
+                    article_candidates.append({"title": title, "url": url})
+
+        # 중복 제거 및 상위 10개만 선정
+        seen = set()
+        final_articles = []
+        for art in article_candidates:
+            if art['url'] not in seen:
+                final_articles.append(art)
+                seen.add(art['url'])
+                if len(final_articles) >= 10: break
+        
+        print(f"📝 [3/3] 기사 {len(final_articles)}개 발견! 요약 시작...")
+        
+        for art in final_articles:
+            print(f"   - {art['title'][:20]}... 요약 중")
+            art['summary'] = get_article_summary(driver, art['url'])
             
-        seen_urls = set()
-        
-        for link in links:
-            url = link['href']
-            title = link.get_text(strip=True)
-            
-            if "/article/" in url and title and len(title) > 10:
-                if not url.startswith("http"):
-                    url = "https://www.hankyung.com" + url
-                    
-                if url not in seen_urls:
-                    article_links.append({"title": title, "url": url})
-                    seen_urls.add(url)
-                    
-        # Limit to top 10 as requested
-        # Usually the "Pick" section is at the top or sidebar.
-        # If we got too many, maybe we want to be more selective.
-        # For now, let's take the first 10 distinct articles found near the header or just first 10.
-        
-        target_articles = article_links[:10]
-        
-        print(f"Found {len(target_articles)} articles. Processing summaries...")
-        
-        for art in target_articles:
-            print(f"Summarizing: {art['title']}...")
-            summary = get_article_summary(driver, art['url'])
-            art['summary'] = summary
-            time.sleep(1) # Be polite
-            
-        data["articles"] = target_articles
+        data["articles"] = final_articles
         
     except Exception as e:
-        print(f"Error scraping: {e}")
+        print(f"❌ 에러 발생: {e}")
     finally:
         driver.quit()
-        
     return data
 
 def send_to_discord(data):
-    if not WEBHOOK_URL:
-        print("Error: DISCORD_WEBHOOK_URL not set.")
+    if not WEBHOOK_URL or not WEBHOOK_URL.startswith("http"):
+        print("❌ 에러: 디스코드 웹훅 주소가 설정되지 않았거나 틀립니다!")
         return
-
+        
     articles = data["articles"]
-    youtube = data["youtube_link"]
-    
     if not articles:
-        print("No articles to send.")
+        print("😿 보낼 기사가 없습니다.")
         return
         
-    print(f"Sending {len(articles)} items to Discord...")
+    print(f"🚀 디스코드로 슝! ({len(articles)}개)")
     
-    embeds = []
-    
-    # 1. Header & YouTube Embed
-    description = f"{datetime.now().strftime('%Y-%m-%d')} 한국경제 모닝루틴 Pick"
-    if youtube:
-        description += f"\n📺 [라이브 방송 보러가기]({youtube})"
-        
-    embeds.append({
-        "title": "☕ 굿모닝! 한경 모닝루틴 브리핑",
-        "description": description,
-        "color": 0x1E90FF, # Dodger Blue
+    # 첫 번째 메시지 (제목 및 유튜브)
+    header = {
+        "title": "☕ 한경 모닝루틴 브리핑",
+        "description": f"🗓️ {datetime.now().strftime('%Y-%m-%d')}\n" + (f"📺 [라이브 방송]({data['youtube_link']})" if data['youtube_link'] else ""),
+        "color": 0x1E90FF,
         "url": TARGET_URL
-    })
+    }
     
-    # 2. Article Embeds
-    # Discord limit: 10 embeds per message.
-    # If we have 1 header + 10 articles = 11 embeds -> Split required.
-    
-    current_embeds = [embeds[0]] # Start with header
-    
+    embed_list = [header]
     for i, art in enumerate(articles):
-        summ_text = ""
-        if art.get("summary"):
-            for point in art["summary"]:
-                summ_text += f"- {point}\n"
-        else:
-            summ_text = "요약을 가져오지 못했습니다. 링크를 확인하세요."
-            
-        article_embed = {
+        summary = "\n".join([f"• {s}" for s in art['summary']]) if art.get('summary') else "링크를 참조하세요."
+        embed_list.append({
             "title": f"{i+1}. {art['title']}",
             "url": art['url'],
-            "description": summ_text,
-            "color": 0xFFFFFF # White
-        }
+            "description": summary,
+            "color": 0xFFFFFF
+        })
         
-        current_embeds.append(article_embed)
-        
-        # If we reached 10 embeds, send and reset
-        if len(current_embeds) == 10:
-            requests.post(WEBHOOK_URL, json={"username": "한경모닝루틴봇", "embeds": current_embeds})
-            current_embeds = []
+        if len(embed_list) == 10:
+            requests.post(WEBHOOK_URL, json={"embeds": embed_list})
+            embed_list = []
             time.sleep(1)
             
-    # Send remaining
-    if current_embeds:
-        requests.post(WEBHOOK_URL, json={"username": "한경모닝루틴봇", "embeds": current_embeds})
-        
-    print("Sent successfully.")
+    if embed_list:
+        requests.post(WEBHOOK_URL, json={"embeds": embed_list})
+    print("✨ 전송 완료!")
 
 if __name__ == "__main__":
-    data = fetch_hankyung_mr()
-    send_to_discord(data)
+    results = fetch_hankyung_mr()
+    send_to_discord(results)
